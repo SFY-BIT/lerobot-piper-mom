@@ -244,7 +244,12 @@ def control_loop(
         start_loop_t = time.perf_counter()
 
         if teleoperate:
-            observation, action = robot.teleop_step(record_data=True)
+            need_observation = dataset is not None or display_cameras
+            teleop_result = robot.teleop_step(record_data=need_observation)
+            if need_observation:
+                observation, action = teleop_result
+            else:
+                observation, action = None, None
         else:
             observation = robot.capture_observation()
 
@@ -259,7 +264,7 @@ def control_loop(
             frame = {**observation, **action, "task": single_task}
             dataset.add_frame(frame)
 
-        if display_cameras and not is_headless():
+        if display_cameras and observation is not None and not is_headless():
             image_keys = [key for key in observation if "image" in key]
             for key in image_keys:
                 cv2.imshow(key, cv2.cvtColor(observation[key].numpy(), cv2.COLOR_RGB2BGR))

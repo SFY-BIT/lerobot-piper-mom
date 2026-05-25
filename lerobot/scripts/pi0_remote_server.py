@@ -10,6 +10,29 @@ import zmq
 from lerobot.common.policies.pi0.modeling_pi0 import PI0Policy
 
 
+def summarize_normalization_buffers(policy: PI0Policy) -> dict[str, list[str]]:
+    missing: dict[str, list[str]] = {}
+    modules = {
+        "normalize_inputs": policy.normalize_inputs,
+        "normalize_targets": policy.normalize_targets,
+        "unnormalize_outputs": policy.unnormalize_outputs,
+    }
+
+    for module_name, module in modules.items():
+        bad_keys: list[str] = []
+        for key in module.features:
+            buffer_name = "buffer_" + key.replace(".", "_")
+            if not hasattr(module, buffer_name):
+                continue
+            buffer = getattr(module, buffer_name)
+            for stat_name, value in buffer.items():
+                if torch.isinf(value).any():
+                    bad_keys.append(f"{key}.{stat_name}")
+        if bad_keys:
+            missing[module_name] = bad_keys
+    return missing
+
+
 def build_batch(payload: dict[str, Any], device: torch.device) -> dict[str, Any]:
     batch: dict[str, Any] = {
         "observation.state": torch.tensor(payload["state"], dtype=torch.float32, device=device).unsqueeze(0),
@@ -39,6 +62,15 @@ def main() -> None:
     policy.to(device)
     policy.eval()
     policy.reset()
+
+    missing_stats = summarize_normalization_buffers(policy)
+    if missing_stats:
+        for module_name, keys in missing_stats.items():
+            logging.error("Missing normalization stats in %s: %s", module_name, ", ".join(keys))
+        raise RuntimeError(
+            "Loaded pi0 policy is missing normalization statistics. "
+            "This export cannot be used for direct LeRobot inference."
+        )
 
     context = zmq.Context()
     socket = context.socket(zmq.REP)

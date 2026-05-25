@@ -1,4 +1,5 @@
 import time
+import os
 from typing import Dict
 from piper_sdk import *
 from lerobot.common.robot_devices.motors.configs import PiperMotorsBusConfig
@@ -16,11 +17,14 @@ class PiperMotorsBus:
         self.safe_disable_position = [0.0, 0.0, 0.0, 0.0, 0.52, 0.0, 0.0]
         self.pose_factor = 1000 # 单位 0.001mm
         self.joint_factor = 57324.840764 # 1000*180/3.14， rad -> 度（单位0.001度）
-        self.joint_command_deadband = 120
-        self.gripper_command_deadband = 2000
+        self.joint_command_deadband = 0
+        self.gripper_command_deadband = 0
         self._last_joint_command = None
         self._last_gripper_command = None
         self._last_move_mode = None
+        self.interp_steps = max(1, int(os.getenv("LEROBOT_PIPER_INTERP_STEPS", "5")))
+        self.interp_sleep_s = max(0.0, float(os.getenv("LEROBOT_PIPER_INTERP_SLEEP_S", "0.006")))
+        self._last_target_joint = list(self.init_joint_position)
 
     @property
     def motor_names(self) -> list[str]:
@@ -98,6 +102,33 @@ class PiperMotorsBus:
         """
         self.write(target_joint=self.init_joint_position)
 
+    def hold_position(self, target_joint: list[float], hold_s: float = 2.0, interval_s: float = 0.05):
+        """Repeatedly send a target for a short period so the arm actually settles there."""
+        deadline = time.perf_counter() + max(0.0, hold_s)
+        while time.perf_counter() < deadline:
+            self.write(target_joint=target_joint)
+            time.sleep(interval_s)
+
+    def _send_joint_command(self, target_joint: list[float]) -> None:
+        joint_0 = round(target_joint[0] * self.joint_factor)
+        joint_1 = round(target_joint[1] * self.joint_factor)
+        joint_2 = round(target_joint[2] * self.joint_factor)
+        joint_3 = round(target_joint[3] * self.joint_factor)
+        joint_4 = round(target_joint[4] * self.joint_factor)
+        joint_5 = round(target_joint[5] * self.joint_factor)
+        gripper_range = round(target_joint[6] * 1000 * 1000)
+
+        joint_commands = [joint_0, joint_1, joint_2, joint_3, joint_4, joint_5]
+
+        if self._last_move_mode != "joint":
+            self.piper.MotionCtrl_2(0x01, 0x01, 100, 0x00) # joint control
+            self._last_move_mode = "joint"
+
+        self.piper.JointCtrl(*joint_commands)
+        self.piper.GripperCtrl(gripper_range, 1000, 0x01, 0) # 单位 0.001°
+        self._last_joint_command = joint_commands
+        self._last_gripper_command = gripper_range
+
     def write(self, target_joint:list):
         """
             Joint control
@@ -110,35 +141,24 @@ class PiperMotorsBus:
                 joint_6 (float): 关节6角度 -90000~90000 / 57324.840764
                 gripper_range: 夹爪角度 0~0.08
         """
-        joint_0 = round(target_joint[0]*self.joint_factor)
-        joint_1 = round(target_joint[1]*self.joint_factor)
-        joint_2 = round(target_joint[2]*self.joint_factor)
-        joint_3 = round(target_joint[3]*self.joint_factor)
-        joint_4 = round(target_joint[4]*self.joint_factor)
-        joint_5 = round(target_joint[5]*self.joint_factor)
-        gripper_range = round(target_joint[6]*1000*1000)
+        target_joint = [float(value) for value in target_joint]
+        start_joint = list(self._last_target_joint)
+        steps = self.interp_steps
 
-        joint_commands = [joint_0, joint_1, joint_2, joint_3, joint_4, joint_5]
-        joints_changed = self._last_joint_command is None or any(
-            abs(curr - prev) >= self.joint_command_deadband
-            for curr, prev in zip(joint_commands, self._last_joint_command)
-        )
-        gripper_changed = (
-            self._last_gripper_command is None
-            or abs(gripper_range - self._last_gripper_command) >= self.gripper_command_deadband
-        )
+        if len(start_joint) != len(target_joint):
+            start_joint = list(target_joint)
 
-        if not joints_changed and not gripper_changed:
-            return
+        for step_idx in range(1, steps + 1):
+            ratio = step_idx / steps
+            interp_target = [
+                start + (target - start) * ratio
+                for start, target in zip(start_joint, target_joint, strict=True)
+            ]
+            self._send_joint_command(interp_target)
+            if step_idx < steps and self.interp_sleep_s > 0.0:
+                time.sleep(self.interp_sleep_s)
 
-        self.piper.MotionCtrl_2(0x01, 0x01, 100, 0x00) # joint control
-        self._last_move_mode = "joint"
-        if joints_changed:
-            self.piper.JointCtrl(*joint_commands)
-            self._last_joint_command = joint_commands
-        if gripper_changed:
-            self.piper.GripperCtrl(gripper_range, 1000, 0x01, 0) # 单位 0.001°
-            self._last_gripper_command = gripper_range
+        self._last_target_joint = list(target_joint)
 
     def write_pose(self, target_pose: list | tuple, gripper: float):
         """

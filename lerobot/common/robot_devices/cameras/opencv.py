@@ -37,6 +37,38 @@ def _decode_fourcc(value: float) -> str:
     return "".join(chars)
 
 
+def _open_video_capture(cv2_module, camera_index: int | str):
+    """Open a camera with Linux-specific backend preferences to avoid unstable defaults."""
+    if platform.system() == "Linux":
+        # Prefer integer camera ids with the V4L2 backend. Passing a '/dev/videoX'
+        # string can route through less stable backends on some OpenCV builds.
+        linux_candidates = []
+        if isinstance(camera_index, str) and camera_index.startswith("/dev/video"):
+            try:
+                linux_candidates.append((int(camera_index.removeprefix("/dev/video")), cv2_module.CAP_V4L2))
+            except ValueError:
+                pass
+        linux_candidates.extend(
+            [
+                (camera_index, cv2_module.CAP_V4L2),
+                (camera_index, cv2_module.CAP_ANY),
+            ]
+        )
+
+        tried = set()
+        for source, backend in linux_candidates:
+            key = (source, backend)
+            if key in tried:
+                continue
+            tried.add(key)
+            camera = cv2_module.VideoCapture(source, backend)
+            if camera.isOpened():
+                return camera
+            camera.release()
+
+    return cv2_module.VideoCapture(camera_index)
+
+
 def find_cameras(raise_when_empty=False, max_index_search_range=MAX_OPENCV_INDEX, mock=False) -> list[dict]:
     cameras = []
     if platform.system() == "Linux":
@@ -78,7 +110,7 @@ def _find_cameras(
 
     camera_ids = []
     for camera_idx in possible_camera_ids:
-        camera = cv2.VideoCapture(camera_idx)
+        camera = _open_video_capture(cv2, camera_idx)
         is_open = camera.isOpened()
         camera.release()
 
@@ -280,7 +312,7 @@ class OpenCVCamera:
         camera_idx = f"/dev/video{self.camera_index}" if platform.system() == "Linux" else self.camera_index
         # First create a temporary camera trying to access `camera_index`,
         # and verify it is a valid camera by calling `isOpened`.
-        tmp_camera = cv2.VideoCapture(camera_idx)
+        tmp_camera = _open_video_capture(cv2, camera_idx)
         is_camera_open = tmp_camera.isOpened()
         # Release camera to make it accessible for `find_camera_indices`
         tmp_camera.release()
@@ -305,16 +337,22 @@ class OpenCVCamera:
             actual_width = camera.get(cv2.CAP_PROP_FRAME_WIDTH)
             actual_height = camera.get(cv2.CAP_PROP_FRAME_HEIGHT)
             actual_fourcc = camera.get(cv2.CAP_PROP_FOURCC)
+            backend_name = "unknown"
+            if hasattr(camera, "getBackendName"):
+                try:
+                    backend_name = camera.getBackendName()
+                except Exception:
+                    backend_name = "unknown"
             print(
                 f"[opencv-debug] camera={self.camera_index} stage={stage} "
                 f"width={actual_width} height={actual_height} fps={actual_fps} "
-                f"fourcc={actual_fourcc}({_decode_fourcc(actual_fourcc)})"
+                f"fourcc={actual_fourcc}({_decode_fourcc(actual_fourcc)}) backend={backend_name}"
             )
 
         # Secondly, create the camera that will be used downstream.
         # Note: For some unknown reason, calling `isOpened` blocks the camera which then
         # needs to be re-created.
-        self.camera = cv2.VideoCapture(camera_idx)
+        self.camera = _open_video_capture(cv2, camera_idx)
         log_camera_state(self.camera, "after_open")
 
         if self.width is not None:
@@ -326,6 +364,8 @@ class OpenCVCamera:
         if self.fps is not None:
             self.camera.set(cv2.CAP_PROP_FPS, self.fps)
             log_camera_state(self.camera, "after_set_fps")
+        if hasattr(cv2, "CAP_PROP_BUFFERSIZE"):
+            self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         actual_fps = self.camera.get(cv2.CAP_PROP_FPS)
         actual_width = self.camera.get(cv2.CAP_PROP_FRAME_WIDTH)

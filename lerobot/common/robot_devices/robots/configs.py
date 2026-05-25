@@ -626,7 +626,7 @@ class PiperRobotConfig(RobotConfig):
     cameras: dict[str, CameraConfig] = field(
         default_factory=lambda: {
         "one": OpenCVCameraConfig(
-            camera_index=0,
+            camera_index=8,
             fps=25,
             width=640,
             height=480,
@@ -634,7 +634,7 @@ class PiperRobotConfig(RobotConfig):
         # Keep its resolution aligned with camera "one" so multi-camera training
         # does not fail on mismatched image shapes.
         "two": OpenCVCameraConfig(
-            camera_index=6,
+            camera_index=4,
             fps=30,
             width=640,
             height=480,
