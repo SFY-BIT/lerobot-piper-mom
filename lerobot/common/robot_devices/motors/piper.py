@@ -121,7 +121,7 @@ class PiperMotorsBus:
         joint_commands = [joint_0, joint_1, joint_2, joint_3, joint_4, joint_5]
 
         if self._last_move_mode != "joint":
-            self.piper.MotionCtrl_2(0x01, 0x01, 100, 0x00) # joint control
+            self.piper.MotionCtrl_2(0x01, 0x01, 100, 0xAD) # joint control with MIT high-follow mode
             self._last_move_mode = "joint"
 
         self.piper.JointCtrl(*joint_commands)

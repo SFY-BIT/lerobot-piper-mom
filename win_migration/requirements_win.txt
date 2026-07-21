@@ -1,0 +1,21 @@
+# lerobot-piper-mom Windows pip requirements
+# 生成于 2026-07-21，基于 Ubuntu 22.04 迁移环境
+
+torch==2.6.0+cu124
+torchvision==0.21.0+cu124
+torchaudio==2.6.0+cu124
+numpy>=1.22
+opencv-python>=4.8
+pygame>=2.5
+pyserial>=3.5
+piper-sdk==0.6.1
+python-can>=4.3
+scipy>=1.10
+nidaqmx>=1.5
+pyrealsense2>=2.54
+rerun-sdk>=0.20
+jsonlines>=3.1
+pyarrow>=14.0
+tqdm>=4.65
+datasets<4.0.0
+huggingface_hub>=0.20
