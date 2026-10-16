@@ -12,3 +12,12 @@ siyuan-V2/
 diffusion_cup_move/
 data_piper_multi_record_cam_act_10_2_full/
 data_eval_act_piper_multi_record_cam_act_replay/
+
+# Python 编译缓存
+__pycache__/
+*.py[cod]
+
+# 本机实验数据 / 第三方厂商文件 (不入库)
+client_logs/
+FORCE/
+win_migration/backup/

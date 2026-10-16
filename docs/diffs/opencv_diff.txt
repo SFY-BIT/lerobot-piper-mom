@@ -1,0 +1,298 @@
+﻿diff --git a/lerobot/common/robot_devices/cameras/opencv.py b/lerobot/common/robot_devices/cameras/opencv.py
+index b117505..810fb61 100644
+--- a/lerobot/common/robot_devices/cameras/opencv.py
++++ b/lerobot/common/robot_devices/cameras/opencv.py
+@@ -28,45 +28,66 @@ from lerobot.common.utils.utils import capture_timestamp_utc
+ # on MacOS. However, on Ubuntu, the indices are different like 6, 16, 23.
+ # When you change the USB port or reboot the computer, the operating system might
+ # treat the same cameras as new devices. Thus we select a higher bound to search indices.
+-MAX_OPENCV_INDEX = 60
+-
+-
+-def _decode_fourcc(value: float) -> str:
+-    code = int(value)
+-    chars = [chr((code >> (8 * i)) & 0xFF) for i in range(4)]
+-    return "".join(chars)
+-
+-
+-def _open_video_capture(cv2_module, camera_index: int | str):
+-    """Open a camera with Linux-specific backend preferences to avoid unstable defaults."""
+-    if platform.system() == "Linux":
+-        # Prefer integer camera ids with the V4L2 backend. Passing a '/dev/videoX'
+-        # string can route through less stable backends on some OpenCV builds.
+-        linux_candidates = []
+-        if isinstance(camera_index, str) and camera_index.startswith("/dev/video"):
+-            try:
+-                linux_candidates.append((int(camera_index.removeprefix("/dev/video")), cv2_module.CAP_V4L2))
+-            except ValueError:
+-                pass
+-        linux_candidates.extend(
+-            [
+-                (camera_index, cv2_module.CAP_V4L2),
+-                (camera_index, cv2_module.CAP_ANY),
+-            ]
+-        )
+-
+-        tried = set()
+-        for source, backend in linux_candidates:
+-            key = (source, backend)
+-            if key in tried:
+-                continue
+-            tried.add(key)
+-            camera = cv2_module.VideoCapture(source, backend)
+-            if camera.isOpened():
+-                return camera
+-            camera.release()
+-
+-    return cv2_module.VideoCapture(camera_index)
++MAX_OPENCV_INDEX = 60
++
++
++def _decode_fourcc(value: float) -> str:
++    code = int(value)
++    chars = [chr((code >> (8 * i)) & 0xFF) for i in range(4)]
++    return "".join(chars)
++
++
++def _open_video_capture(cv2_module, camera_index: int | str):
++    """Open a camera with Linux-specific backend preferences to avoid unstable defaults."""
++    if platform.system() == "Linux":
++        # Prefer integer camera ids with the V4L2 backend. Passing a '/dev/videoX'
++        # string can route through less stable backends on some OpenCV builds.
++        linux_candidates = []
++        if isinstance(camera_index, str) and camera_index.startswith("/dev/video"):
++            try:
++                linux_candidates.append((int(camera_index.removeprefix("/dev/video")), cv2_module.CAP_V4L2))
++            except ValueError:
++                pass
++        linux_candidates.extend(
++            [
++                (camera_index, cv2_module.CAP_V4L2),
++                (camera_index, cv2_module.CAP_ANY),
++            ]
++        )
++
++        tried = set()
++        for source, backend in linux_candidates:
++            key = (source, backend)
++            if key in tried:
++                continue
++            tried.add(key)
++            camera = cv2_module.VideoCapture(source, backend)
++            if camera.isOpened():
++                return camera
++            camera.release()
++
++    # Windows: σàüΦ«╕ΘÇÜΦ┐çτÄ»σóâσÅÿΘçÅΘÇëµï⌐σÉÄτ½»∩╝îΘü┐σàì DSHOW σü╢σÅæσìíΘí┐∩╝ê656ms Θò┐σ░╛σ╗╢Φ┐ƒ∩╝ë
++    # LEROBOT_OPENCV_BACKEND σÅ»ΘÇë: MSMF (Θ╗ÿΦ«ñ, µÄ¿ΦìÉ), DSHOW, ANY
++    if platform.system() == "Windows":
++        import os as _os
++        backend_name = _os.getenv("LEROBOT_OPENCV_BACKEND", "MSMF").upper()
++        backend_map = {
++            "MSMF": getattr(cv2_module, "CAP_MSMF", None),
++            "DSHOW": getattr(cv2_module, "CAP_DSHOW", None),
++            "ANY": getattr(cv2_module, "CAP_ANY", None),
++        }
++        backend = backend_map.get(backend_name)
++        if backend is not None:
++            try:
++                camera = cv2_module.VideoCapture(camera_index, backend)
++                if camera.isOpened():
++                    return camera
++                camera.release()
++            except Exception:
++                pass
++            # σªéµ₧£µîçσ«ÜσÉÄτ½»σñ▒Φ┤Ñ∩╝îσ¢₧ΘÇÇσê░Θ╗ÿΦ«ñ
++
++    return cv2_module.VideoCapture(camera_index)
+ 
+ 
+ def find_cameras(raise_when_empty=False, max_index_search_range=MAX_OPENCV_INDEX, mock=False) -> list[dict]:
+@@ -108,11 +129,11 @@ def _find_cameras(
+     else:
+         import cv2
+ 
+-    camera_ids = []
+-    for camera_idx in possible_camera_ids:
+-        camera = _open_video_capture(cv2, camera_idx)
+-        is_open = camera.isOpened()
+-        camera.release()
++    camera_ids = []
++    for camera_idx in possible_camera_ids:
++        camera = _open_video_capture(cv2, camera_idx)
++        is_open = camera.isOpened()
++        camera.release()
+ 
+         if is_open:
+             print(f"Camera found at index {camera_idx}")
+@@ -296,9 +317,9 @@ class OpenCVCamera:
+         elif config.rotation == 180:
+             self.rotation = cv2.ROTATE_180
+ 
+-    def connect(self):
+-        if self.is_connected:
+-            raise RobotDeviceAlreadyConnectedError(f"OpenCVCamera({self.camera_index}) is already connected.")
++    def connect(self):
++        if self.is_connected:
++            raise RobotDeviceAlreadyConnectedError(f"OpenCVCamera({self.camera_index}) is already connected.")
+ 
+         if self.mock:
+             import tests.mock_cv2 as cv2
+@@ -309,13 +330,13 @@ class OpenCVCamera:
+             # when other threads are used to save the images.
+             cv2.setNumThreads(1)
+ 
+-        camera_idx = f"/dev/video{self.camera_index}" if platform.system() == "Linux" else self.camera_index
+-        # First create a temporary camera trying to access `camera_index`,
+-        # and verify it is a valid camera by calling `isOpened`.
+-        tmp_camera = _open_video_capture(cv2, camera_idx)
+-        is_camera_open = tmp_camera.isOpened()
+-        # Release camera to make it accessible for `find_camera_indices`
+-        tmp_camera.release()
++        camera_idx = f"/dev/video{self.camera_index}" if platform.system() == "Linux" else self.camera_index
++        # First create a temporary camera trying to access `camera_index`,
++        # and verify it is a valid camera by calling `isOpened`.
++        tmp_camera = _open_video_capture(cv2, camera_idx)
++        is_camera_open = tmp_camera.isOpened()
++        # Release camera to make it accessible for `find_camera_indices`
++        tmp_camera.release()
+         del tmp_camera
+ 
+         # If the camera doesn't work, display the camera indices corresponding to
+@@ -332,45 +353,45 @@ class OpenCVCamera:
+ 
+             raise OSError(f"Can't access OpenCVCamera({camera_idx}).")
+ 
+-        def log_camera_state(camera, stage: str):
+-            actual_fps = camera.get(cv2.CAP_PROP_FPS)
+-            actual_width = camera.get(cv2.CAP_PROP_FRAME_WIDTH)
+-            actual_height = camera.get(cv2.CAP_PROP_FRAME_HEIGHT)
+-            actual_fourcc = camera.get(cv2.CAP_PROP_FOURCC)
+-            backend_name = "unknown"
+-            if hasattr(camera, "getBackendName"):
+-                try:
+-                    backend_name = camera.getBackendName()
+-                except Exception:
+-                    backend_name = "unknown"
+-            print(
+-                f"[opencv-debug] camera={self.camera_index} stage={stage} "
+-                f"width={actual_width} height={actual_height} fps={actual_fps} "
+-                f"fourcc={actual_fourcc}({_decode_fourcc(actual_fourcc)}) backend={backend_name}"
+-            )
+-
+-        # Secondly, create the camera that will be used downstream.
+-        # Note: For some unknown reason, calling `isOpened` blocks the camera which then
+-        # needs to be re-created.
+-        self.camera = _open_video_capture(cv2, camera_idx)
+-        log_camera_state(self.camera, "after_open")
+-
+-        if self.width is not None:
+-            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+-            log_camera_state(self.camera, "after_set_width")
+-        if self.height is not None:
+-            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+-            log_camera_state(self.camera, "after_set_height")
+-        if self.fps is not None:
+-            self.camera.set(cv2.CAP_PROP_FPS, self.fps)
+-            log_camera_state(self.camera, "after_set_fps")
+-        if hasattr(cv2, "CAP_PROP_BUFFERSIZE"):
+-            self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+-
+-        actual_fps = self.camera.get(cv2.CAP_PROP_FPS)
+-        actual_width = self.camera.get(cv2.CAP_PROP_FRAME_WIDTH)
+-        actual_height = self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT)
+-        log_camera_state(self.camera, "before_validate")
++        def log_camera_state(camera, stage: str):
++            actual_fps = camera.get(cv2.CAP_PROP_FPS)
++            actual_width = camera.get(cv2.CAP_PROP_FRAME_WIDTH)
++            actual_height = camera.get(cv2.CAP_PROP_FRAME_HEIGHT)
++            actual_fourcc = camera.get(cv2.CAP_PROP_FOURCC)
++            backend_name = "unknown"
++            if hasattr(camera, "getBackendName"):
++                try:
++                    backend_name = camera.getBackendName()
++                except Exception:
++                    backend_name = "unknown"
++            print(
++                f"[opencv-debug] camera={self.camera_index} stage={stage} "
++                f"width={actual_width} height={actual_height} fps={actual_fps} "
++                f"fourcc={actual_fourcc}({_decode_fourcc(actual_fourcc)}) backend={backend_name}"
++            )
++
++        # Secondly, create the camera that will be used downstream.
++        # Note: For some unknown reason, calling `isOpened` blocks the camera which then
++        # needs to be re-created.
++        self.camera = _open_video_capture(cv2, camera_idx)
++        log_camera_state(self.camera, "after_open")
++
++        if self.width is not None:
++            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
++            log_camera_state(self.camera, "after_set_width")
++        if self.height is not None:
++            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
++            log_camera_state(self.camera, "after_set_height")
++        if self.fps is not None:
++            self.camera.set(cv2.CAP_PROP_FPS, self.fps)
++            log_camera_state(self.camera, "after_set_fps")
++        if hasattr(cv2, "CAP_PROP_BUFFERSIZE"):
++            self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
++
++        actual_fps = self.camera.get(cv2.CAP_PROP_FPS)
++        actual_width = self.camera.get(cv2.CAP_PROP_FRAME_WIDTH)
++        actual_height = self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT)
++        log_camera_state(self.camera, "before_validate")
+ 
+         # Using `math.isclose` since actual fps can be a float (e.g. 29.9 instead of 30)
+         if self.fps is not None and not math.isclose(self.fps, actual_fps, rel_tol=1e-3):
+@@ -450,9 +471,17 @@ class OpenCVCamera:
+         return color_image
+ 
+     def read_loop(self):
++        _debug = __import__("os").getenv("LEROBOT_CAMERA_LATENCY_DEBUG", "0") == "1"
+         while not self.stop_event.is_set():
+             try:
+-                self.color_image = self.read()
++                if _debug:
++                    _t0 = time.perf_counter()
++                    self.color_image = self.read()
++                    _dt = time.perf_counter() - _t0
++                    if _dt > 0.020:  # Φ╢àΦ┐ç 20ms µëìΦ«░σ╜ò
++                        print(f"[cam-debug {self.camera_index}] read_loop read()={_dt*1000:.1f}ms")
++                else:
++                    self.color_image = self.read()
+             except Exception as e:
+                 print(f"Error reading in thread: {e}")
+ 
+@@ -468,12 +497,32 @@ class OpenCVCamera:
+             self.thread.daemon = True
+             self.thread.start()
+ 
++        # === σ╗╢Φ┐ƒΦ░âΦ»ò∩╝Üσî║σêå"τ¡ëτ╝ôσ¡ÿ"σÆî"GIL τ½₧Σ║ë" ===
++        _debug = __import__("os").getenv("LEROBOT_CAMERA_LATENCY_DEBUG", "0") == "1"
++        if _debug:
++            _t0 = time.perf_counter()
++            _t_last_check = _t0
++            _wait_total = 0.0
++            _gil_total = 0.0
++
+         num_tries = 0
+         while True:
+             if self.color_image is not None:
++                if _debug:
++                    _total = time.perf_counter() - _t0
++                    if _total > 0.020:  # Φ╢àΦ┐ç 20ms µëìΦ«░σ╜ò
++                        print(f"[cam-debug {self.camera_index}] async_read total={_total*1000:.1f}ms "
++                              f"wait={_wait_total*1000:.1f}ms gil={_gil_total*1000:.1f}ms")
+                 return self.color_image
+ 
++            if _debug:
++                _t_before_sleep = time.perf_counter()
+             time.sleep(1 / self.fps)
++            if _debug:
++                _t_after_sleep = time.perf_counter()
++                _wait_total += _t_after_sleep - _t_before_sleep
++                _gil_total += (_t_after_sleep - _t_last_check) - (_t_after_sleep - _t_before_sleep)
++                _t_last_check = _t_after_sleep
+             num_tries += 1
+             if num_tries > self.fps * 2:
+                 raise TimeoutError("Timed out waiting for async_read() to start.")

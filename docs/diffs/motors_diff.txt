@@ -1,0 +1,222 @@
+﻿diff --git a/lerobot/common/robot_devices/motors/piper.py b/lerobot/common/robot_devices/motors/piper.py
+index 806e8fd..7526bb4 100644
+--- a/lerobot/common/robot_devices/motors/piper.py
++++ b/lerobot/common/robot_devices/motors/piper.py
+@@ -2,8 +2,62 @@ import time
+ import os
+ from typing import Dict
+ from piper_sdk import *
++from piper_sdk.hardware_port.can_encapsulation_v0_4_0 import C_STD_CAN as _C_STD_CAN
+ from lerobot.common.robot_devices.motors.configs import PiperMotorsBusConfig
+ 
++# Windows / gs_usb ΘÇéΘàì∩╝Üpiper_sdk σåàΘâ¿µèè bustype σåÖµ¡╗Σ╕║ "socketcan"∩╝î
++# σ£¿ Windows Σ╕èΘ£ÇΦªüµö╣τö¿ "gs_usb"∩╝êΘÇÜΦ┐ç Zadig + WinUSB + libusb∩╝ëπÇé
++# ΘÇÜΦ┐çτÄ»σóâσÅÿΘçÅ LEROBOT_CAN_BUSTYPE / LEROBOT_CAN_CHANNEL / LEROBOT_CAN_BITRATE µÄºσê╢∩╝Ü
++#   - Linux (Θ╗ÿΦ«ñ): LEROBOT_CAN_BUSTYPE=socketcan, can_name="can0"
++#   - Windows:       LEROBOT_CAN_BUSTYPE=gs_usb,     can_name="0" (Φ«╛σñçτ┤óσ╝ò)
++# monkey-patch C_STD_CAN∩╝îΣ╜┐σà╢σ£¿ bustype=gs_usb µù╢∩╝Ü
++#   1) σ╝║σê╢ bustype Σ╕║ gs_usb∩╝êΦªåτ¢û piper_sdk σåÖµ¡╗τÜä socketcan∩╝ë
++#   2) Φ╖│Φ┐ç JudgeCanInfo∩╝êLinux Σ╕ôσ▒₧τÜä `ip link` µúÇµƒÑ∩╝îWindows Σ╕èΣ╝ÜµèÑΘöÖ∩╝ë
++#   3) µèè channel Σ╗Äσ¡ùτ¼ªΣ╕▓Φ╜¼µêÉ int∩╝êgs_usb µÄÑσÅúΦªüµ▒éµò┤µò░τ┤óσ╝ò∩╝ë
++#   4) τö¿ interface= ΦÇîΣ╕ìµÿ» bustype=∩╝êΘü┐σàì python-can 4.2+ σ╝âτö¿Φ¡ªσæè∩╝ë
++_LEROBOT_CAN_BUSTYPE = os.getenv("LEROBOT_CAN_BUSTYPE", "socketcan").lower()
++_LEROBOT_CAN_BITRATE = int(os.getenv("LEROBOT_CAN_BITRATE", "1000000"))
++
++if _LEROBOT_CAN_BUSTYPE == "gs_usb":
++    _orig_C_STD_CAN_init = _C_STD_CAN.__init__
++    _orig_C_STD_CAN_Init = _C_STD_CAN.Init
++
++    def _patched_C_STD_CAN_init(self, channel_name="can0", bustype="socketcan",
++                                expected_bitrate=1000000, judge_flag=True,
++                                auto_init=True, callback_function=None):
++        # gs_usb µÄÑσÅúΦªüµ▒é channel Σ╕║µò┤µò░τ┤óσ╝ò∩╝¢σàüΦ«╕Σ╝áσàÑ "0" Φ┐Öµá╖τÜäσ¡ùτ¼ªΣ╕▓
++        if isinstance(channel_name, str) and channel_name.isdigit():
++            channel_name = int(channel_name)
++        # σ╝║σê╢Σ╜┐τö¿ gs_usb∩╝îΦªåτ¢û piper_sdk σåÖµ¡╗τÜä socketcan
++        # Φ╖│Φ┐ç JudgeCanInfo∩╝êLinux Σ╕ôσ▒₧τÜä `ip link` µúÇµƒÑ∩╝ë
++        return _orig_C_STD_CAN_init(self, channel_name=channel_name,
++                                    bustype=_LEROBOT_CAN_BUSTYPE,
++                                    expected_bitrate=expected_bitrate,
++                                    judge_flag=False,
++                                    auto_init=auto_init,
++                                    callback_function=callback_function)
++
++    def _patched_C_STD_CAN_Init(self):
++        if self.bus is not None:
++            return
++        import can as _can
++        try:
++            channel = self.channel_name
++            if isinstance(channel, str) and channel.isdigit():
++                channel = int(channel)
++            self.bus = _can.interface.Bus(channel=channel,
++                                          interface=_LEROBOT_CAN_BUSTYPE,
++                                          bitrate=_LEROBOT_CAN_BITRATE)
++            print(channel, "bus opened successfully (gs_usb).")
++        except _can.CanError as e:
++            print(f"Failed to open CAN bus: {e}")
++            self.bus = None
++
++    _C_STD_CAN.__init__ = _patched_C_STD_CAN_init
++    _C_STD_CAN.Init = _patched_C_STD_CAN_Init
++    print(f"[PiperMotorsBus] gs_usb ΘÇéΘàìσ╖▓σÉ»τö¿ (channel τ┤óσ╝òµ¿íσ╝Å, bitrate={_LEROBOT_CAN_BITRATE})")
++
++
+ class PiperMotorsBus:
+     """
+         σ»╣Piper SDKτÜäΣ║îµ¼íσ░üΦúà
+@@ -25,6 +79,19 @@ class PiperMotorsBus:
+         self.interp_steps = max(1, int(os.getenv("LEROBOT_PIPER_INTERP_STEPS", "5")))
+         self.interp_sleep_s = max(0.0, float(os.getenv("LEROBOT_PIPER_INTERP_SLEEP_S", "0.006")))
+         self._last_target_joint = list(self.init_joint_position)
++        # === σ╗╢Φ┐ƒΦ░âΦ»ò instrumentation ===
++        # τö¿τÄ»σóâσÅÿΘçÅ LEROBOT_PIPER_LATENCY_LOG=1 σ╝ÇσÉ»
++        self._latency_log_enabled = os.getenv("LEROBOT_PIPER_LATENCY_LOG", "0") == "1"
++        self._latency_log_path = os.getenv("LEROBOT_PIPER_LATENCY_LOG_PATH",
++                                           "C:/Users/User/Desktop/piper_latency.csv")
++        # Φ«░σ╜òµ£ÇΦ┐æΣ╕Çµ¼íσÅæΘÇüτÜä (timestamp, target_joint)
++        self._last_send_t = None
++        self._last_send_target = None
++        # τÄ»σ╜óτ╝ôσå▓σî║∩╝ÜΦ«░σ╜òµëÇµ£ë send/read Σ║ïΣ╗╢∩╝îτö¿Σ║ÄΣ║ïσÉÄσêåµ₧É
++        self._latency_events = []  # list of (event_type, timestamp, joints)
++        self._latency_event_lock = __import__("threading").Lock()
++        if self._latency_log_enabled:
++            print(f"[PiperMotorsBus] σ╗╢Φ┐ƒΦ░âΦ»òσ╖▓σ╝ÇσÉ»∩╝îµùÑσ┐ùσ░åσåÖσàÑ {self._latency_log_path}")
+ 
+     @property
+     def motor_names(self) -> list[str]:
+@@ -124,10 +191,20 @@ class PiperMotorsBus:
+             self.piper.MotionCtrl_2(0x01, 0x01, 100, 0xAD) # joint control with MIT high-follow mode
+             self._last_move_mode = "joint"
+ 
++        send_t = time.perf_counter()
+         self.piper.JointCtrl(*joint_commands)
+         self.piper.GripperCtrl(gripper_range, 1000, 0x01, 0) # σìòΣ╜ì 0.001┬░
+         self._last_joint_command = joint_commands
+         self._last_gripper_command = gripper_range
++        # === σ╗╢Φ┐ƒΦ░âΦ»ò∩╝ÜΦ«░σ╜òσÅæΘÇüΣ║ïΣ╗╢ ===
++        if self._latency_log_enabled:
++            self._last_send_t = send_t
++            self._last_send_target = list(target_joint)
++            with self._latency_event_lock:
++                self._latency_events.append(("send", send_t, list(target_joint)))
++                # ΘÖÉσê╢τ╝ôσå▓σî║σñºσ░Å∩╝îΘü┐σàìσåàσ¡ÿτêåτé╕
++                if len(self._latency_events) > 20000:
++                    self._latency_events = self._latency_events[-10000:]
+ 
+     def write(self, target_joint:list):
+         """
+@@ -196,13 +273,14 @@ class PiperMotorsBus:
+             - joints: radians
+             - gripper: meters
+         """
++        read_t = time.perf_counter()
+         joint_msg = self.piper.GetArmJointMsgs()
+         joint_state = joint_msg.joint_state
+ 
+         gripper_msg = self.piper.GetArmGripperMsgs()
+         gripper_state = gripper_msg.gripper_state
+-        
+-        return {
++
++        result = {
+             "joint_1": joint_state.joint_1 / self.joint_factor,
+             "joint_2": joint_state.joint_2 / self.joint_factor,
+             "joint_3": joint_state.joint_3 / self.joint_factor,
+@@ -211,6 +289,96 @@ class PiperMotorsBus:
+             "joint_6": joint_state.joint_6 / self.joint_factor,
+             "gripper": gripper_state.grippers_angle / 1_000_000,
+         }
++        # === σ╗╢Φ┐ƒΦ░âΦ»ò∩╝ÜΦ«░σ╜òΦ»╗σÅûΣ║ïΣ╗╢∩╝îσ╣╢Φ«íτ«ùΣ╕Äµ£ÇΦ┐æΣ╕Çµ¼íσÅæΘÇüτÜäµù╢Θù┤σ╖« ===
++        if self._latency_log_enabled:
++            joints_list = [result[f"joint_{i}"] for i in range(1, 7)] + [result["gripper"]]
++            with self._latency_event_lock:
++                self._latency_events.append(("read", read_t, joints_list))
++                if len(self._latency_events) > 20000:
++                    self._latency_events = self._latency_events[-10000:]
++        return result
++
++    def dump_latency_log(self) -> None:
++        """µèèσ╗╢Φ┐ƒΣ║ïΣ╗╢τ╝ôσå▓σî║σåÖσàÑ CSV µûçΣ╗╢∩╝îΣ╛┐Σ║ÄΣ║ïσÉÄσêåµ₧ÉπÇé
++        CSV σêù: event_type, timestamp_s, j1, j2, j3, j4, j5, j6, gripper
++        """
++        if not self._latency_log_enabled:
++            return
++        with self._latency_event_lock:
++            events = list(self._latency_events)
++        if not events:
++            print("[latency] µ▓íµ£ëΣ║ïΣ╗╢σÅ»σåÖ")
++            return
++        # σÅûτ¼¼Σ╕ÇΣ╕¬Σ║ïΣ╗╢τÜäµù╢Θù┤µê│Σ╜£Σ╕║σƒ║σçå∩╝îµû╣Σ╛┐τ¢╕σ»╣µù╢Θù┤σêåµ₧É
++        t0 = events[0][1]
++        import csv
++        with open(self._latency_log_path, "w", newline="") as f:
++            writer = csv.writer(f)
++            writer.writerow(["event_type", "t_s", "j1", "j2", "j3", "j4", "j5", "j6", "gripper"])
++            for ev_type, t, joints in events:
++                row = [ev_type, f"{t - t0:.6f}"] + [f"{x:.6f}" for x in joints]
++                writer.writerow(row)
++        print(f"[latency] σ╖▓σåÖσàÑ {len(events)} µ¥íΣ║ïΣ╗╢σê░ {self._latency_log_path}")
++
++        # σÉîµù╢µëôσì░Σ╕ÇΣ╗╜µæÿΦªüτ╗ƒΦ«í
++        self._print_latency_summary(events)
++
++    def _print_latency_summary(self, events) -> None:
++        """µëôσì░σ╗╢Φ┐ƒµæÿΦªü∩╝ÜsendΓåÆread Θù┤ΘÜöπÇüτ¢«µáç vs σ«₧ΘÖàσà│ΦèéΦºÆτÜäΦ╖ƒΘÜÅµ╗₧σÉÄπÇé"""
++        # 1) sendΓåÆread µù╢Θù┤Θù┤ΘÜöτ╗ƒΦ«í
++        sends = [(t, j) for et, t, j in events if et == "send"]
++        reads = [(t, j) for et, t, j in events if et == "read"]
++        print(f"[latency] Σ║ïΣ╗╢τ╗ƒΦ«í: send={len(sends)}, read={len(reads)}")
++        if not sends or not reads:
++            return
++
++        # 2) Φ╖ƒΘÜÅµ╗₧σÉÄσêåµ₧É∩╝Üσ»╣Σ║Äµ»Åµ¼í send∩╝îµë╛σê░Σ╣ïσÉÄτ¼¼Σ╕ÇΣ╕¬ read∩╝î
++        #    Φ«íτ«ù read.joint Σ╕Ä send.target τÜäσ╖«σÇ╝∩╝îΣ╗ÑσÅèσ╖«σÇ╝µö╢µò¢σê░ΘÿêσÇ╝σåàτÜäµù╢Θù┤
++        #    Φ┐ÖΘçîτ«Çσîû∩╝ÜΦ«íτ«ù send σÉÄσñÜΣ╣à∩╝îread τÜäσà│ΦèéΦºÆτ¼¼Σ╕Çµ¼íµÄÑΦ┐æ send τÜäτ¢«µáç∩╝êΘÿêσÇ╝ 0.02 rad ~1.1┬░∩╝ë
++        threshold = 0.02
++        follow_lags = []
++        for s_t, s_j in sends:
++            # µë╛ send Σ╣ïσÉÄµëÇµ£ë read∩╝îτ£ïσô¬Σ╕¬ read τ¼¼Σ╕Çµ¼íµÄÑΦ┐æ target
++            for r_t, r_j in reads:
++                if r_t < s_t:
++                    continue
++                # Φ«íτ«ùσà│ΦèéΦºÆσ╖«∩╝êσ┐╜τòÑ gripper∩╝îgripper τö¿σìòτï¼µîçµáç∩╝ë
++                diffs = [abs(r_j[i] - s_j[i]) for i in range(6)]
++                max_diff = max(diffs)
++                if max_diff < threshold:
++                    follow_lags.append(r_t - s_t)
++                    break
++        if follow_lags:
++            import statistics
++            print(f"[latency] Φ╖ƒΘÜÅµ╗₧σÉÄ∩╝êτ¢«µáçΓåÆσ«₧ΘÖàµö╢µò¢σê░ {threshold}rad σåà∩╝ë:")
++            print(f"  µá╖µ£¼µò░: {len(follow_lags)}")
++            print(f"  σ╣│σ¥ç: {statistics.mean(follow_lags)*1000:.1f} ms")
++            print(f"  Σ╕¡Σ╜ìµò░: {statistics.median(follow_lags)*1000:.1f} ms")
++            print(f"  µ£Çσñº: {max(follow_lags)*1000:.1f} ms")
++            print(f"  µ£Çσ░Å: {min(follow_lags)*1000:.1f} ms")
++        else:
++            print(f"[latency] µ▓íµ£ëµë╛σê░ send σÉÄ read µö╢µò¢σê░ {threshold}rad σåàτÜäµá╖µ£¼")
++
++        # 3) sendΓåÆΣ╕ïΣ╕ÇΣ╕¬ read τÜäµù╢Θù┤Θù┤ΘÜö∩╝êσÅìµÿá read τ║┐τ¿ïτÜäσôìσ║öΘÇƒσ║ª∩╝ë
++        gaps = []
++        for s_t, _ in sends:
++            for r_t, _ in reads:
++                if r_t >= s_t:
++                    gaps.append(r_t - s_t)
++                    break
++        if gaps:
++            import statistics
++            print(f"[latency] sendΓåÆΣ╕ïΣ╕ÇΣ╕¬ read Θù┤ΘÜö:")
++            print(f"  σ╣│σ¥ç: {statistics.mean(gaps)*1000:.2f} ms")
++            print(f"  Σ╕¡Σ╜ìµò░: {statistics.median(gaps)*1000:.2f} ms")
++
++        # 4) send Θù┤ΘÜöσÆî read Θù┤ΘÜö∩╝êσÅìµÿáµÄºσê╢ΘóæτÄç∩╝ë
++        if len(sends) > 1:
++            send_intervals = [sends[i+1][0] - sends[i][0] for i in range(len(sends)-1)]
++            print(f"[latency] send Θù┤ΘÜö∩╝êµÄºσê╢σæ¿µ£ƒ∩╝ë: σ╣│σ¥ç {statistics.mean(send_intervals)*1000:.2f} ms")
++        if len(reads) > 1:
++            read_intervals = [reads[i+1][0] - reads[i][0] for i in range(len(reads)-1)]
++            print(f"[latency] read Θù┤ΘÜö: σ╣│σ¥ç {statistics.mean(read_intervals)*1000:.2f} ms")
+     
+     def safe_disconnect(self):
+         """ 

@@ -1,0 +1,186 @@
+﻿diff --git a/lerobot/common/robot_devices/robots/piper.py b/lerobot/common/robot_devices/robots/piper.py
+index 2d83f22..35cd62d 100644
+--- a/lerobot/common/robot_devices/robots/piper.py
++++ b/lerobot/common/robot_devices/robots/piper.py
+@@ -164,6 +164,17 @@ class PiperRobot:
+ 
+     def disconnect(self) -> None:
+         """Move to home position, disable piper, and disconnect cameras."""
++        # === σ╗╢Φ┐ƒΦ░âΦ»ò∩╝ÜΘÇÇσç║µù╢ dump µùÑσ┐ù ===
++        if hasattr(self.arm, "dump_latency_log"):
++            try:
++                self.arm.dump_latency_log()
++            except Exception as e:
++                print(f"[latency] dump σñ▒Φ┤Ñ: {e}")
++        # === τ╗åτ▓Æσ║ªσ╗╢Φ┐ƒΦ░âΦ»ò∩╝Üdump teleop_step σÉäτÄ»ΦèéΦÇùµù╢ ===
++        detail_events = self.logs.get("_teleop_detail_events", [])
++        if detail_events:
++            self._dump_teleop_detail_latency(detail_events)
++
+         if not self.inference_time and self.teleop is not None:
+             self.teleop.stop()
+ 
+@@ -400,15 +411,35 @@ class PiperRobot:
+         if self.teleop is None and self.inference_time:
+             self.teleop = self._create_teleop_controller()
+ 
++        # === τ╗åτ▓Æσ║ªσ╗╢Φ┐ƒ instrumentation ===
++        _latency_detail = os.getenv("LEROBOT_TELEOP_LATENCY_DETAIL", "0") == "1"
++        _detail_events = self.logs.setdefault("_teleop_detail_events", [])
++        def _mark(stage, t0=None):
++            if not _latency_detail:
++                return None
++            t = time.perf_counter()
++            if t0 is not None:
++                _detail_events.append((stage, t - t0))
++            return t
++
++        t_step_start = time.perf_counter()
++        _mark("step_start")
++
+         before_read_t = time.perf_counter()
+         state_before_dict = self.arm.read()
++        t_after_arm_read = _mark("arm.read", before_read_t)
++
+         current_state_before = list(state_before_dict.values())
+         action_dict_raw = self.teleop.get_action()
++        t_after_get_action = _mark("teleop.get_action", t_after_arm_read)
++
+         raw_target_joints = self._apply_teleop_origin(list(action_dict_raw.values()), current_state_before)
++        _mark("apply_teleop_origin", t_after_get_action)
+         self.logs["read_pos_dt_s"] = time.perf_counter() - before_read_t
+ 
+         before_write_t = time.perf_counter()
+         control_mode = self.teleop.get_control_mode()
++        _mark("get_control_mode", before_write_t)
+         self.logs["teleop_control_mode"] = control_mode
+ 
+         executed_action = None
+@@ -421,16 +452,26 @@ class PiperRobot:
+             self.logs["teleop_gripper_target"] = getattr(self.teleop, "gripper", None)
+ 
+             if pose_target is not None:
++                t_w = time.perf_counter()
+                 self.arm.write_pose(pose_target, self.teleop.gripper)
++                _mark("arm.write_pose", t_w)
+                 if need_post_write_read:
++                    t_r = time.perf_counter()
+                     state_after = list(self.arm.read().values())
++                    _mark("arm.read_after", t_r)
+                 self.logs["teleop_arm_read_before"] = list(current_state_before)
+                 self.logs["teleop_arm_read_after"] = list(state_after)
+             else:
++                t_c = time.perf_counter()
+                 executed_action = self._clip_teleop_targets(raw_target_joints, current_state_before)
++                _mark("clip_teleop_targets", t_c)
++                t_w = time.perf_counter()
+                 self.arm.write(executed_action)
++                _mark("arm.write", t_w)
+                 if need_post_write_read:
++                    t_r = time.perf_counter()
+                     state_after = list(self.arm.read().values())
++                    _mark("arm.read_after", t_r)
+                 reference_state = list(
+                     self.logs.get("teleop_clip_reference_state", current_state_before)
+                 )
+@@ -443,10 +484,16 @@ class PiperRobot:
+                     state_after,
+                 )
+         else:
++            t_c = time.perf_counter()
+             executed_action = self._clip_teleop_targets(raw_target_joints, current_state_before)
++            _mark("clip_teleop_targets", t_c)
++            t_w = time.perf_counter()
+             self.arm.write(executed_action)
++            _mark("arm.write", t_w)
+             if need_post_write_read:
++                t_r = time.perf_counter()
+                 state_after = list(self.arm.read().values())
++                _mark("arm.read_after", t_r)
+             reference_state = list(
+                 self.logs.get("teleop_clip_reference_state", current_state_before)
+             )
+@@ -460,6 +507,7 @@ class PiperRobot:
+             )
+ 
+         self.logs["write_pos_dt_s"] = time.perf_counter() - before_write_t
++        _mark("total_step", t_step_start)
+ 
+         if not record_data:
+             return
+@@ -481,8 +529,12 @@ class PiperRobot:
+             before_camread_t = time.perf_counter()
+             images[name] = self.cameras[name].async_read()
+             images[name] = torch.from_numpy(images[name])
++            cam_dt = time.perf_counter() - before_camread_t
+             self.logs[f"read_camera_{name}_dt_s"] = self.cameras[name].logs["delta_timestamp_s"]
+-            self.logs[f"async_read_camera_{name}_dt_s"] = time.perf_counter() - before_camread_t
++            self.logs[f"async_read_camera_{name}_dt_s"] = cam_dt
++            # === τ╗åτ▓Æσ║ªσ╗╢Φ┐ƒ∩╝ÜΦ«░σ╜òµ»ÅΣ╕¬µæäσâÅσñ┤ async_read ΦÇùµù╢ ===
++            if _latency_detail:
++                _detail_events.append((f"camera.async_read.{name}", cam_dt))
+ 
+         obs_dict, action_dict = {}, {}
+         obs_dict["observation.state"] = state_tensor
+@@ -645,8 +697,12 @@ class PiperRobot:
+             before_camread_t = time.perf_counter()
+             images[name] = self.cameras[name].async_read()
+             images[name] = torch.from_numpy(images[name])
++            cam_dt = time.perf_counter() - before_camread_t
+             self.logs[f"read_camera_{name}_dt_s"] = self.cameras[name].logs["delta_timestamp_s"]
+-            self.logs[f"async_read_camera_{name}_dt_s"] = time.perf_counter() - before_camread_t
++            self.logs[f"async_read_camera_{name}_dt_s"] = cam_dt
++            # === τ╗åτ▓Æσ║ªσ╗╢Φ┐ƒ∩╝ÜΦ«░σ╜òµ»ÅΣ╕¬µæäσâÅσñ┤ async_read ΦÇùµù╢ ===
++            if os.getenv("LEROBOT_TELEOP_LATENCY_DETAIL", "0") == "1":
++                self.logs.setdefault("_capture_detail_events", []).append((f"camera.async_read.{name}", cam_dt))
+ 
+         obs_dict = {}
+         obs_dict["observation.state"] = state
+@@ -659,6 +715,47 @@ class PiperRobot:
+             return {"exit_early": False, "rerecord_episode": False}
+         return self.teleop.consume_control_events()
+ 
++    def _dump_teleop_detail_latency(self, detail_events) -> None:
++        """µëôσì░ teleop_step σÉäτÄ»ΦèéΦÇùµù╢τÜäτ╗ƒΦ«íµæÿΦªüπÇé
++        detail_events µÿ» (stage, dt_s) τÜäσêùΦí¿πÇé
++        """
++        import statistics
++        from collections import defaultdict
++        by_stage = defaultdict(list)
++        for stage, dt in detail_events:
++            by_stage[stage].append(dt)
++        print("\n" + "=" * 60)
++        print("[teleop_step τ╗åτ▓Æσ║ªσ╗╢Φ┐ƒτ╗ƒΦ«í] (σìòΣ╜ì ms)")
++        print("=" * 60)
++        # µîëσç║τÄ░Θí║σ║Åµëôσì░σà│Θö«Θÿ╢µ«╡
++        order = ["step_start", "arm.read", "teleop.get_action", "apply_teleop_origin",
++                 "get_control_mode", "clip_teleop_targets", "arm.write", "arm.write_pose",
++                 "arm.read_after", "camera.async_read.one", "camera.async_read.two",
++                 "camera.async_read.cam_high", "camera.async_read.cam_low",
++                 "camera.async_read.cam_left_wrist", "camera.async_read.cam_right_wrist",
++                 "total_step"]
++        for stage in order:
++            if stage not in by_stage:
++                continue
++            dts = by_stage[stage]
++            dts_ms = [d * 1000 for d in dts]
++            print(f"  {stage:25s} n={len(dts):5d}  "
++                  f"avg={statistics.mean(dts_ms):7.2f}  "
++                  f"med={statistics.median(dts_ms):7.2f}  "
++                  f"max={max(dts_ms):7.2f}  "
++                  f"p95={sorted(dts_ms)[int(len(dts_ms)*0.95)]:7.2f}")
++        # µëôσì░σà╢Σ╗ûµ£¬σ£¿ order ΘçîτÜäΘÿ╢µ«╡
++        for stage in by_stage:
++            if stage in order:
++                continue
++            dts = by_stage[stage]
++            dts_ms = [d * 1000 for d in dts]
++            print(f"  {stage:25s} n={len(dts):5d}  "
++                  f"avg={statistics.mean(dts_ms):7.2f}  "
++                  f"med={statistics.median(dts_ms):7.2f}  "
++                  f"max={max(dts_ms):7.2f}")
++        print("=" * 60 + "\n")
++
+     def teleop_safety_stop(self):
+         """Move to home position after recording one episode."""
+         self.run_calibration()

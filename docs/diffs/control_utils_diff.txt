@@ -1,0 +1,111 @@
+﻿diff --git a/lerobot/common/robot_devices/control_utils.py b/lerobot/common/robot_devices/control_utils.py
+index 5bedb4f..086b237 100644
+--- a/lerobot/common/robot_devices/control_utils.py
++++ b/lerobot/common/robot_devices/control_utils.py
+@@ -4,6 +4,7 @@
+ 
+ 
+ import logging
++import os
+ import time
+ import traceback
+ from contextlib import nullcontext
+@@ -240,12 +241,21 @@ def control_loop(
+ 
+     timestamp = 0
+     start_episode_t = time.perf_counter()
++    # === Windows µÄºσê╢σ╛¬τÄ»τô╢Θóê instrumentation ===
++    _loop_debug = os.getenv("LEROBOT_LOOP_DEBUG", "0") == "1"
++    if _loop_debug:
++        _loop_stages = {"teleop_step": [], "add_frame": [], "imshow": [], "busy_wait": [], "log": [], "events": [], "total": []}
++        _loop_count = 0
++        print("[loop-debug] µÄºσê╢σ╛¬τÄ»τô╢Θóê instrumentation σ╖▓σ╝ÇσÉ» (LEROBOT_LOOP_DEBUG=1)")
+     while timestamp < control_time_s:
+         start_loop_t = time.perf_counter()
+ 
+         if teleoperate:
+             need_observation = dataset is not None or display_cameras
++            _t_teleop = time.perf_counter()
+             teleop_result = robot.teleop_step(record_data=need_observation)
++            if _loop_debug:
++                _loop_stages["teleop_step"].append(time.perf_counter() - _t_teleop)
+             if need_observation:
+                 observation, action = teleop_result
+             else:
+@@ -262,32 +272,76 @@ def control_loop(
+ 
+         if dataset is not None:
+             frame = {**observation, **action, "task": single_task}
++            _t_add = time.perf_counter()
+             dataset.add_frame(frame)
++            if _loop_debug:
++                _loop_stages["add_frame"].append(time.perf_counter() - _t_add)
+ 
+         if display_cameras and observation is not None and not is_headless():
++            _t_imshow = time.perf_counter()
+             image_keys = [key for key in observation if "image" in key]
+             for key in image_keys:
+                 cv2.imshow(key, cv2.cvtColor(observation[key].numpy(), cv2.COLOR_RGB2BGR))
+             cv2.waitKey(1)
++            if _loop_debug:
++                _loop_stages["imshow"].append(time.perf_counter() - _t_imshow)
+ 
+         if fps is not None:
+             dt_s = time.perf_counter() - start_loop_t
++            _t_wait = time.perf_counter()
+             busy_wait(1 / fps - dt_s)
++            if _loop_debug:
++                _loop_stages["busy_wait"].append(time.perf_counter() - _t_wait)
+ 
++        _t_log = time.perf_counter()
+         dt_s = time.perf_counter() - start_loop_t
+         log_control_info(robot, dt_s, fps=fps)
++        if _loop_debug:
++            _loop_stages["log"].append(time.perf_counter() - _t_log)
+ 
+         if has_method(robot, "consume_control_events"):
++            _t_events = time.perf_counter()
+             robot_events = robot.consume_control_events()
+             for key, value in robot_events.items():
+                 if value:
+                     events[key] = True
++            if _loop_debug:
++                _loop_stages["events"].append(time.perf_counter() - _t_events)
++
++        if _loop_debug:
++            _loop_stages["total"].append(time.perf_counter() - start_loop_t)
++            _loop_count += 1
++            # µ»Å 100 σ╕ºµëôσì░Σ╕Çµ¼íτ╗ƒΦ«í
++            if _loop_count % 100 == 0:
++                import statistics as _st
++                print(f"\n[loop-debug] === τ¼¼ {_loop_count} σ╕ºτ╗ƒΦ«í (σìòΣ╜ì ms) ===")
++                for stage_name in ["teleop_step", "add_frame", "imshow", "busy_wait", "log", "events", "total"]:
++                    vals = _loop_stages[stage_name]
++                    if not vals:
++                        continue
++                    vals_ms = [v * 1000 for v in vals[-100:]]
++                    print(f"  {stage_name:15s} n={len(vals):5d} avg={_st.mean(vals_ms):7.2f} "
++                          f"med={_st.median(vals_ms):7.2f} max={max(vals_ms):7.2f} "
++                          f"p95={sorted(vals_ms)[int(len(vals_ms)*0.95)]:7.2f}")
+ 
+         timestamp = time.perf_counter() - start_episode_t
+         if events["exit_early"]:
+             events["exit_early"] = False
+             break
+ 
++    # === ΘÇÇσç║µù╢µëôσì░µ£Çτ╗êτ╗ƒΦ«í ===
++    if _loop_debug and _loop_count > 0:
++        import statistics as _st
++        print(f"\n[loop-debug] === µ£Çτ╗êτ╗ƒΦ«í ({_loop_count} σ╕º, σìòΣ╜ì ms) ===")
++        for stage_name in ["teleop_step", "add_frame", "imshow", "busy_wait", "log", "events", "total"]:
++            vals = _loop_stages[stage_name]
++            if not vals:
++                continue
++            vals_ms = [v * 1000 for v in vals]
++            print(f"  {stage_name:15s} n={len(vals):5d} avg={_st.mean(vals_ms):7.2f} "
++                  f"med={_st.median(vals_ms):7.2f} max={max(vals_ms):7.2f} "
++                  f"p95={sorted(vals_ms)[int(len(vals_ms)*0.95)]:7.2f}")
++
+ 
+ def reset_environment(robot, events, reset_time_s, fps):
+     # TODO(rcadene): refactor warmup_record and reset_environment
