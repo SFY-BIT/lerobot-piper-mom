@@ -1,0 +1,35 @@
+{
+  "source": "C:\\Users\\User\\.cache\\huggingface\\lerobot\\my_robot\\erase_board_flexiv",
+  "episodes": 40,
+  "margin_rad": 0.02,
+  "joints": {
+    "j1": {
+      "min": -0.264,
+      "max": 0.9817
+    },
+    "j2": {
+      "min": -0.0344,
+      "max": 2.4314
+    },
+    "j3": {
+      "min": -2.2709,
+      "max": 0.0577
+    },
+    "j4": {
+      "min": -0.3968,
+      "max": 0.5215
+    },
+    "j5": {
+      "min": -0.3612,
+      "max": 1.4812
+    },
+    "j6": {
+      "min": -1.3793,
+      "max": 0.9085
+    },
+    "gripper": {
+      "min": -0.02,
+      "max": 0.1
+    }
+  }
+}
