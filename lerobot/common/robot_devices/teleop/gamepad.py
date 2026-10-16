@@ -109,7 +109,7 @@ DEFAULT_UARM_PIPER_JOINT_SCALE = (1.0, 1.0, 1.0, 1.0, -1.0, 1.0)
 DEFAULT_UARM_GRIPPER_OPEN_DEG = -7.0
 DEFAULT_UARM_GRIPPER_CLOSED_DEG = 48.0
 DEFAULT_UARM_GRIPPER_MIN = 0.0
-DEFAULT_UARM_GRIPPER_MAX = 0.08
+DEFAULT_UARM_GRIPPER_MAX = 0.1  # piper 夹爪行程上限 (归一化 [0, 0.1])
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -222,6 +222,9 @@ def detect_so101_leader_port(port: str | None = None) -> str | None:
 def detect_uarm_port(port: str | None = None) -> str | None:
     candidate = port or os.getenv("LEROBOT_UARM_PORT")
     if candidate:
+        # Windows 串口路径 (COMx) 不是文件系统路径，直接返回
+        if os.name == "nt" or candidate.startswith("COM"):
+            return candidate
         return candidate if Path(candidate).exists() else None
 
     return DEFAULT_UARM_PORT if Path(DEFAULT_UARM_PORT).exists() else None
@@ -692,7 +695,7 @@ class _SO101LeaderController:
             for value, (lower_deg, upper_deg) in zip(joint_deg, PIPER_JOINT_LIMITS_DEG, strict=True)
         ]
         joint_rad = [math.radians(value) for value in joint_deg]
-        gripper_m = max(0.0, min(0.08, state["gripper"] / 100.0 * 0.08))
+        gripper_m = max(0.0, min(0.1, state["gripper"] / 100.0 * 0.1))
         self.gripper = gripper_m
 
         return {
@@ -822,7 +825,7 @@ class _UArmLeaderController:
         self.reader: UArmServoReader | None = None
         self.control_mode = "joint"
         self.pose_target = None
-        self.gripper = self.gripper_min
+        self.gripper = self.gripper_max  # 初始上电夹爪张开到范围上限 (0.1)
         self._pending_events = {
             "exit_early": False,
             "rerecord_episode": False,
@@ -1335,7 +1338,7 @@ class SixAxisArmController:
 
             self.gripper += self.gripper_speed
 
-            self.gripper = max(0.0, min(0.08, self.gripper))
+            self.gripper = max(0.0, min(0.1, self.gripper))
             time.sleep(0.005)
 
     def get_action(self) -> Dict:

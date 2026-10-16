@@ -10,6 +10,11 @@ def busy_wait(seconds):
         end_time = time.perf_counter() + seconds
         while time.perf_counter() < end_time:
             pass
+    elif platform.system() == "Windows":
+        if seconds > 0:
+            end_time = time.perf_counter() + seconds
+            while time.perf_counter() < end_time:
+                time.sleep(0)
     else:
         # On Linux time.sleep is accurate
         if seconds > 0:

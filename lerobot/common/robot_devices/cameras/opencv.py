@@ -66,6 +66,27 @@ def _open_video_capture(cv2_module, camera_index: int | str):
                 return camera
             camera.release()
 
+    # Windows: 允许通过环境变量选择后端，避免 DSHOW 偶发卡顿（656ms 长尾延迟）
+    # LEROBOT_OPENCV_BACKEND 可选: MSMF (默认, 推荐), DSHOW, ANY
+    if platform.system() == "Windows":
+        import os as _os
+        backend_name = _os.getenv("LEROBOT_OPENCV_BACKEND", "MSMF").upper()
+        backend_map = {
+            "MSMF": getattr(cv2_module, "CAP_MSMF", None),
+            "DSHOW": getattr(cv2_module, "CAP_DSHOW", None),
+            "ANY": getattr(cv2_module, "CAP_ANY", None),
+        }
+        backend = backend_map.get(backend_name)
+        if backend is not None:
+            try:
+                camera = cv2_module.VideoCapture(camera_index, backend)
+                if camera.isOpened():
+                    return camera
+                camera.release()
+            except Exception:
+                pass
+            # 如果指定后端失败，回退到默认
+
     return cv2_module.VideoCapture(camera_index)
 
 

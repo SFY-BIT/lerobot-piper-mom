@@ -54,7 +54,7 @@ def build_visualizer(urdf_path: Path, mesh_dir: Path):
 
 
 def action_to_vis_cfg(action: dict[str, float]) -> list[float]:
-    gripper = max(0.0, min(0.08, action["gripper"]))
+    gripper = max(0.0, min(0.1, action["gripper"]))
     finger = gripper / 2.0
     return [
         action["joint0"],

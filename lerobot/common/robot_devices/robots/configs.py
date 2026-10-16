@@ -1,4 +1,5 @@
 import abc
+import os
 from dataclasses import dataclass, field
 from typing import Sequence
 
@@ -608,7 +609,7 @@ class PiperRobotConfig(RobotConfig):
     follower_arm: dict[str, MotorsBusConfig] = field(
         default_factory=lambda: {
             "main": PiperMotorsBusConfig(
-                can_name="can0",
+                can_name=os.getenv("LEROBOT_CAN_CHANNEL", "can0"),
                 motors={
                     # name: (index, model)
                     "joint_1": [1, "agilex_piper"],
@@ -626,15 +627,15 @@ class PiperRobotConfig(RobotConfig):
     cameras: dict[str, CameraConfig] = field(
         default_factory=lambda: {
         "one": OpenCVCameraConfig(
-            camera_index=4,
+            camera_index=int(os.getenv("LEROBOT_PIPER_CAM_ONE_INDEX", "3")),
             fps=30,
             width=640,
             height=480,
         ),
         # Keep its resolution aligned with camera "one" so multi-camera training
         # does not fail on mismatched image shapes.
-        "two": OpenCVCameraConfig(
-            camera_index=6,
+        "two": IntelRealSenseCameraConfig(
+            serial_number=int(os.getenv("LEROBOT_PIPER_CAM_TWO_SN", "339222071125")),
             fps=30,
             width=640,
             height=480,

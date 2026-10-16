@@ -14,6 +14,17 @@ from lerobot.common.robot_devices.cameras.utils import make_cameras_from_configs
 from lerobot.common.robot_devices.utils import RobotDeviceAlreadyConnectedError, RobotDeviceNotConnectedError
 from lerobot.common.robot_devices.robots.configs import PiperRobotConfig
 
+# 力传感器（可选）
+_force_cal = os.getenv("LEROBOT_FORCE_CAL_PATH", "")
+if _force_cal and os.path.isfile(_force_cal):
+    try:
+        from lerobot.common.robot_devices.sensors.force_sensor import ATIForceSensor
+        _FORCE_AVAILABLE = True
+    except ImportError:
+        _FORCE_AVAILABLE = False
+else:
+    _FORCE_AVAILABLE = False
+
 
 class PiperRobot:
     def __init__(self, config: PiperRobotConfig | None = None, **kwargs):
@@ -48,9 +59,12 @@ class PiperRobot:
         self._policy_joint_indices = [0, 1, 2, 4, 5, 6]
         self._fixed_joint4_value = None
 
-        # policy limits
-        self.policy_joint_delta_limit = 0.025
-        self.policy_gripper_delta_limit = 0.005
+        # policy limits (环境变量可配置, 解决 send_action 硬限幅导致的动作慢)
+        #   LEROBOT_POLICY_JOINT_DELTA   每步关节最大变化 (rad), 默认 0.025
+        #   LEROBOT_POLICY_GRIPPER_DELTA 每步夹爪最大变化, 默认 0.005
+        # 注意: 调大可让推理/回摆动作更快, 但安全性下降 (防猛动撞机)
+        self.policy_joint_delta_limit = float(os.getenv("LEROBOT_POLICY_JOINT_DELTA", "0.025"))
+        self.policy_gripper_delta_limit = float(os.getenv("LEROBOT_POLICY_GRIPPER_DELTA", "0.005"))
 
         # teleop filters
         self.teleop_joint_deadbands = [0.01, 0.008, 0.008, 0.01, 0.003, 0.01]
@@ -64,6 +78,13 @@ class PiperRobot:
         self.teleop_settle_frames = 3
         self.teleop_startup_hold_s = 2.0
         self.startup_zero_hold_s = float(os.getenv("LEROBOT_PIPER_STARTUP_ZERO_HOLD_S", "0.8"))
+
+        # 遥控夹爪增益: leader 夹爪范围与 follower 不匹配时放大
+        # 例: 1.2 → leader 满开时 follower 开到 120% (0.1→0.12)
+        # 仅作用于遥控 (teleop), 不影响推理
+        self.teleop_gripper_gain = float(os.getenv("LEROBOT_PIPER_TELEOP_GRIPPER_GAIN", "1.0"))
+        # 上电回零时夹爪初始张开位置 (归一化上限 0.1)
+        self.startup_gripper_open = float(os.getenv("LEROBOT_PIPER_STARTUP_GRIPPER_OPEN", "0.1"))
 
         # states
         self._last_joint4_target = None
@@ -95,11 +116,38 @@ class PiperRobot:
         self._teleop_debug_counter = 0
         self._policy_debug_counter = 0
 
+        # === 力传感器（可选）===
+        self.force_sensor = None
+        if _FORCE_AVAILABLE:
+            try:
+                self.force_sensor = ATIForceSensor(
+                    cal_path=_force_cal,
+                    device=os.getenv("LEROBOT_FORCE_DEVICE", "Dev1"),
+                    channels=os.getenv("LEROBOT_FORCE_CHANNELS", "ai0:5"),
+                )
+            except Exception as e:
+                print(f"[PiperRobot] 力传感器初始化失败: {e}")
+                self.force_sensor = None
+
     def _create_teleop_controller(self):
         controller, detected_mode = create_piper_teleop_controller(prefer_leader=True)
         self.teleop_mode = detected_mode
         print(f"Teleop controller selected: {detected_mode}")
         return controller
+
+    @property
+    def has_force_sensor(self):
+        return self.force_sensor is not None
+
+    def _read_force(self) -> np.ndarray | None:
+        """读取力传感器数据，如果未配置则返回 None"""
+        if self.force_sensor is None:
+            return None
+        try:
+            return self.force_sensor.read()
+        except Exception as e:
+            print(f"[PiperRobot] 力传感器读取失败: {e}")
+            return None
 
     @property
     def camera_features(self) -> dict:
@@ -134,6 +182,19 @@ class PiperRobot:
         }
 
     @property
+    def force_features(self) -> dict:
+        """力传感器 feature 定义"""
+        if self.force_sensor is None:
+            return {}
+        return {
+            "observation.force": {
+                "dtype": "float32",
+                "shape": (6,),
+                "names": ["Fx", "Fy", "Fz", "Tx", "Ty", "Tz"],
+            },
+        }
+
+    @property
     def has_camera(self):
         return len(self.cameras) > 0
 
@@ -158,6 +219,9 @@ class PiperRobot:
             self.cameras[name].connect()
             print(f"camera {name} connected")
 
+        if self.force_sensor is not None:
+            self.force_sensor.connect()
+
         print("All connected")
         self.is_connected = True
         self.run_calibration()
@@ -176,6 +240,9 @@ class PiperRobot:
             for cam in self.cameras.values():
                 cam.disconnect()
 
+        if self.force_sensor is not None:
+            self.force_sensor.close()
+
         self.is_connected = False
 
     def run_calibration(self):
@@ -185,9 +252,12 @@ class PiperRobot:
 
         print("Moving piper to startup zero pose...")
         self.arm.apply_calibration()
+        # 上电回零后夹爪张开到 startup_gripper_open (默认 0.1)
+        startup_home = list(self.arm.init_joint_position)
+        startup_home[-1] = self.startup_gripper_open
         if hasattr(self.arm, "hold_position"):
             self.arm.hold_position(
-                self.arm.init_joint_position,
+                startup_home,
                 hold_s=self.startup_zero_hold_s,
                 interval_s=0.05,
             )
@@ -220,6 +290,12 @@ class PiperRobot:
         absolute_targets = list(target_joints)
         for idx in range(min(6, len(absolute_targets), len(self._teleop_origin_state))):
             absolute_targets[idx] = float(absolute_targets[idx] + self._teleop_origin_state[idx])
+
+        # 夹爪: 开合增益 (leader 输出直接 × gain, 方向与原版一致)
+        if len(absolute_targets) > 6:
+            follower_target = float(target_joints[-1]) * self.teleop_gripper_gain
+            absolute_targets[-1] = max(0.0, min(0.1, follower_target))
+
         return absolute_targets
 
     def _filter_uarm_teleop_targets(self, target_joints: list[float], current_state: list[float]) -> list[float]:
@@ -400,6 +476,10 @@ class PiperRobot:
         if self.teleop is None and self.inference_time:
             self.teleop = self._create_teleop_controller()
 
+        # 排空力传感器缓冲（防止连续采样溢出）
+        if self.force_sensor is not None and hasattr(self.force_sensor, "drain"):
+            self.force_sensor.drain()
+
         before_read_t = time.perf_counter()
         state_before_dict = self.arm.read()
         current_state_before = list(state_before_dict.values())
@@ -489,6 +569,10 @@ class PiperRobot:
         action_dict["action"] = action_tensor
         for name in self.cameras:
             obs_dict[f"observation.images.{name}"] = images[name]
+        # === 力传感器（可选）===
+        ft = self._read_force()
+        if ft is not None:
+            obs_dict["observation.force"] = torch.as_tensor(ft, dtype=torch.float32)
 
         return obs_dict, action_dict
 
@@ -652,6 +736,10 @@ class PiperRobot:
         obs_dict["observation.state"] = state
         for name in self.cameras:
             obs_dict[f"observation.images.{name}"] = images[name]
+        # === 力传感器（可选）===
+        ft = self._read_force()
+        if ft is not None:
+            obs_dict["observation.force"] = torch.as_tensor(ft, dtype=torch.float32)
         return obs_dict
 
     def consume_control_events(self) -> dict[str, bool]:
