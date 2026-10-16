@@ -88,7 +88,7 @@ D:\miniconda\envs\lerobot\python.exe lerobot/scripts/control_robot.py `
 ```
 
 - **这个模式没有 `→`/`←`/`ESC` 热键**（`control_robot.py` 只在 `record` 分支装键盘监听）
-- 结束方式：`Ctrl-C`，或等 `--control.teleop_time_s` 超时
+- 结束方式：`Ctrl-C`，或加 `--control.teleop_time_s=N` 等它超时（默认 `None` = 无限循环）
 - 例外：手柄 `RB` / 领航臂 `q` 会触发 `exit_early`，能提前结束循环（`control_loop` 消费 `consume_control_events()`）
 
 ---
@@ -134,6 +134,30 @@ D:\miniconda\envs\lerobot\python.exe lerobot/scripts/control_robot.py `
 ```
 
 流程：`warmup(2s)` → 每段 `录制(episode_time_s)` → `reset(重置环境 reset_time_s)` → 直到录满 `num_episodes`。
+
+**`--control.*` 参数（默认值取自 [control_configs.py](c:/Users/User/Desktop/lerobot/lerobot-piper-mom/lerobot/common/robot_devices/control_configs.py)）：**
+
+| 参数 | 默认 | 含义 |
+|------|:--:|------|
+| `--control.repo_id` | 必填 | 数据集名（约定 `{hf用户名}/{数据集名}`） |
+| `--control.single_task` | 必填 | 任务描述（写进数据集） |
+| `--control.num_episodes` | 50 | 录制段数 |
+| `--control.episode_time_s` | 60 | 单段录制时长（秒） |
+| `--control.reset_time_s` | 60 | 段间重置时长（秒） |
+| `--control.warmup_time_s` | 10 | 开录前预热（设备同步用） |
+| `--control.fps` | 策略 fps（无策略时不限） | 帧率 |
+| `--control.video` | True | 把帧编码成视频 |
+| `--control.push_to_hub` | **True** | ⚠️ 默认会上传 HuggingFace Hub，本地录制务必显式 `false` |
+| `--control.private` | False | HF 仓库设为私有 |
+| `--control.resume` | False | 续录已有数据集 |
+| `--control.display_cameras` | True | 实时显示相机画面 |
+| `--control.play_sounds` | True | 语音播报事件 |
+| `--control.root` | 空 | 数据集存储根目录 |
+| `--control.num_image_writer_processes` | 0 | 写图子进程数（fps 不稳时调） |
+| `--control.num_image_writer_threads_per_camera` | 4 | 每相机写图线程数 |
+| `--control.policy` | 空 | 指定策略后可边推理边录（一般用模式 B 代替） |
+
+`--control.type=teleoperate` 的参数更少：`fps`（默认不限）、`teleop_time_s`（默认 `None` = 无限）、`display_cameras`（默认 True）。
 
 热键：见 §7.1（`→` 提前结束当前阶段、`←` 重录上一条、`ESC` 结束整个流程）。
 

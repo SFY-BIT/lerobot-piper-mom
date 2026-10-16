@@ -17,7 +17,9 @@ data_eval_act_piper_multi_record_cam_act_replay/
 __pycache__/
 *.py[cod]
 
-# 本机实验数据 / 第三方厂商文件 (不入库)
-client_logs/
-FORCE/
-win_migration/backup/
+# 本机实验数据 / 第三方厂商文件 (不入库; 仅根目录 FORCE/ 保留 README 占位)
+# 注意: 必须用前导 / 锚定到仓库根, 否则会误伤 scripts/force/ 之类的同名目录
+/client_logs/
+/FORCE/*
+!/FORCE/README.md
+/win_migration/backup/
